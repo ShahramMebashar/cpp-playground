@@ -1,4 +1,4 @@
-import type { CompileResponse, StatusMessage } from '../workers/compiler.worker';
+import type { CompileResponse, StatusMessage } from '../workers/compiler.worker.ts';
 
 type MessageFromWorker = CompileResponse | StatusMessage;
 
@@ -12,12 +12,16 @@ export class CompilerBridge {
 
   constructor(onStatusChange?: (status: StatusMessage) => void) {
     this.onStatusChange = onStatusChange;
-    this.worker = new Worker(
+    this.worker = this.createWorker();
+  }
+
+  private createWorker(): Worker {
+    const worker = new Worker(
       new URL('../workers/compiler.worker.ts', import.meta.url),
       { type: 'module' },
     );
 
-    this.worker.onmessage = (e: MessageEvent<MessageFromWorker>) => {
+    worker.onmessage = (e: MessageEvent<MessageFromWorker>) => {
       const msg = e.data;
       if (msg.type === 'status') {
         this.onStatusChange?.(msg);
@@ -29,6 +33,28 @@ export class CompilerBridge {
         }
       }
     };
+
+    worker.onerror = (e) => {
+      console.error('[CompilerBridge] Worker error:', e);
+      for (const [id, pending] of this.pendingCompilations.entries()) {
+        pending.resolve({
+          type: 'compile-result',
+          id,
+          success: false,
+          errors: [{ line: 1, column: 1, severity: 'error', message: 'Compiler worker crashed' }],
+          stderr: 'Compiler worker crashed',
+        });
+      }
+      this.pendingCompilations.clear();
+      this.resetWorker();
+    };
+
+    return worker;
+  }
+
+  private resetWorker() {
+    this.worker.terminate();
+    this.worker = this.createWorker();
   }
 
   compile(code: string): Promise<CompileResponse> {
@@ -37,6 +63,10 @@ export class CompilerBridge {
       this.pendingCompilations.set(id, { resolve });
       this.worker.postMessage({ type: 'compile', id, code });
     });
+  }
+
+  warmup() {
+    this.worker.postMessage({ type: 'warmup' });
   }
 
   terminate() {

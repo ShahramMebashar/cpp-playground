@@ -4,14 +4,17 @@ export function StatusBar() {
   const compileStatus = useEditorStore((s) => s.compileStatus);
   const wasmStatus = useEditorStore((s) => s.wasmStatus);
   const wasmProgress = useEditorStore((s) => s.wasmProgress);
+  const compilerMessage = useEditorStore((s) => s.compilerMessage);
 
   const statusParts: string[] = [];
 
   if (wasmStatus.compiler === 'loading') {
     const pct = Math.round(wasmProgress * 100);
-    statusParts.push(`Downloading compiler... ${pct}%`);
+    statusParts.push(compilerMessage || `Downloading compiler... ${pct}%`);
   } else if (wasmStatus.compiler === 'error') {
     statusParts.push('Compiler failed to load');
+  } else if (compilerMessage && compileStatus !== 'compiling') {
+    statusParts.push(compilerMessage);
   }
 
   if (wasmStatus.clangd === 'loading') {

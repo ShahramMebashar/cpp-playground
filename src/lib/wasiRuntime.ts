@@ -6,11 +6,16 @@
 const ESUCCESS = 0;
 const EBADF = 8;
 const ENOSYS = 52;
+const ESPIPE = 70;
 
 // Standard file descriptors
 const FD_STDIN = 0;
 const FD_STDOUT = 1;
 const FD_STDERR = 2;
+
+// WASI rights (subset)
+const RIGHTS_FD_READ = 1n << 1n;
+const RIGHTS_FD_WRITE = 1n << 6n;
 
 // SharedArrayBuffer layout for stdin
 // [0..3]  Int32  signal flag  (EMPTY=0 | DATA=1 | EOF=2)
@@ -34,6 +39,13 @@ export class WasiExit extends Error {
     this.name = "WasiExit";
     this.code = code;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Mutable memory reference — allows updating after instantiation
+// ---------------------------------------------------------------------------
+export interface MemoryRef {
+  current: WebAssembly.Memory;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,7 +83,7 @@ function readIovs(
 // ---------------------------------------------------------------------------
 
 export function createWasiImports(
-  memory: WebAssembly.Memory,
+  memoryRef: MemoryRef,
   options: WasiOptions,
 ): { wasi_snapshot_preview1: Record<string, (...args: number[]) => number | void> } {
   const { stdinBuffer, onStdout, onStderr, onExit } = options;
@@ -82,9 +94,9 @@ export function createWasiImports(
   const stdinLength = new Int32Array(stdinBuffer, 4, 1);
   const stdinData = new Uint8Array(stdinBuffer, STDIN_HEADER_BYTES, STDIN_BUF_SIZE);
 
-  // Helpers that always reference the *current* memory buffer (it can grow).
-  const mem8 = () => new Uint8Array(memory.buffer);
-  const memView = () => new DataView(memory.buffer);
+  // Helpers that always reference the *current* memory via the mutable ref.
+  const mem8 = () => new Uint8Array(memoryRef.current.buffer);
+  const memView = () => new DataView(memoryRef.current.buffer);
 
   // --- WASI functions -------------------------------------------------------
 
@@ -212,18 +224,54 @@ export function createWasiImports(
     // Minimal fdstat: filetype + flags
     const view = memView();
     // filetype: CHARACTER_DEVICE (2) for stdio
-    if (fd <= FD_STDERR) {
-      view.setUint8(bufPtr, 2);
-    } else {
+    if (fd > FD_STDERR) {
       return EBADF;
     }
+
+    view.setUint8(bufPtr, 2);
     // fdflags (u16) at offset 2
     view.setUint16(bufPtr + 2, 0, true);
+
+    let rightsBase = 0n;
+    if (fd === FD_STDIN) {
+      rightsBase = RIGHTS_FD_READ;
+    } else if (fd === FD_STDOUT || fd === FD_STDERR) {
+      rightsBase = RIGHTS_FD_WRITE;
+    }
+
     // rights_base (u64) at offset 8
-    view.setBigUint64(bufPtr + 8, 0n, true);
+    view.setBigUint64(bufPtr + 8, rightsBase, true);
     // rights_inheriting (u64) at offset 16
     view.setBigUint64(bufPtr + 16, 0n, true);
     return ESUCCESS;
+  }
+
+  function fd_filestat_get(fd: number, bufPtr: number): number {
+    if (fd > FD_STDERR) return EBADF;
+
+    const view = memView();
+    // __wasi_filestat_t layout:
+    // dev(u64)=0, ino(u64)=0, filetype(u8)=2 (char device),
+    // nlink(u64)=1, size(u64)=0, atim/mtim/ctim(u64)=0
+    view.setBigUint64(bufPtr + 0, 0n, true);
+    view.setBigUint64(bufPtr + 8, 0n, true);
+    view.setUint8(bufPtr + 16, 2);
+    view.setBigUint64(bufPtr + 24, 1n, true);
+    view.setBigUint64(bufPtr + 32, 0n, true);
+    view.setBigUint64(bufPtr + 40, 0n, true);
+    view.setBigUint64(bufPtr + 48, 0n, true);
+    view.setBigUint64(bufPtr + 56, 0n, true);
+    return ESUCCESS;
+  }
+
+  function fd_seek(fd: number): number {
+    if (fd > FD_STDERR) return EBADF;
+    return ESPIPE;
+  }
+
+  function fd_tell(fd: number): number {
+    if (fd > FD_STDERR) return EBADF;
+    return ESPIPE;
   }
 
   function fd_prestat_get(_fd: number): number {
@@ -260,17 +308,17 @@ export function createWasiImports(
       random_get,
 
       // Stubs for remaining WASI functions
-      fd_seek: stub,
-      fd_tell: stub,
-      fd_sync: stub,
-      fd_datasync: stub,
+      fd_seek,
+      fd_tell,
+      fd_sync: () => ESUCCESS,
+      fd_datasync: () => ESUCCESS,
       fd_advise: stub,
       fd_allocate: stub,
-      fd_filestat_get: stub,
+      fd_filestat_get,
       fd_filestat_set_size: stub,
       fd_filestat_set_times: stub,
-      fd_pread: stub,
-      fd_pwrite: stub,
+      fd_pread: () => ESPIPE,
+      fd_pwrite: () => ESPIPE,
       fd_readdir: stub,
       fd_renumber: stub,
       path_create_directory: stub,

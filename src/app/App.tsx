@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import Split from 'react-split';
 import { CodeEditor } from '../components/Editor/CodeEditor';
 import { EditorToolbar } from '../components/Editor/EditorToolbar';
@@ -18,9 +18,19 @@ export function App() {
   const compilerRef = useRef<CompilerBridge | null>(null);
   const runtimeRef = useRef<RuntimeBridge | null>(null);
 
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth <= 768);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)');
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
   const code = useEditorStore((s) => s.code);
   const setCompileStatus = useEditorStore((s) => s.setCompileStatus);
   const setWasmStatus = useEditorStore((s) => s.setWasmStatus);
+  const setCompilerMessage = useEditorStore((s) => s.setCompilerMessage);
 
   // Load code from URL hash on mount
   useEffect(() => {
@@ -38,14 +48,32 @@ export function App() {
     const setWasmProgress = useEditorStore.getState().setWasmProgress;
     compilerRef.current = new CompilerBridge((status) => {
       setWasmStatus('compiler', status.status === 'ready' ? 'ready' : status.status === 'loading' ? 'loading' : 'error');
+      setCompilerMessage(status.message ?? '');
       if (status.progress !== undefined) {
         setWasmProgress(status.progress);
       }
+      if (status.status === 'error' && status.message) {
+        terminalRef.current?.writeln(`\x1b[31m${status.message}\x1b[0m`);
+      }
     });
-    return () => compilerRef.current?.terminate();
-  }, [setWasmStatus]);
 
-  // Initialize runtime bridge
+    const warm = () => compilerRef.current?.warmup();
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+
+    if (typeof requestIdleCallback !== 'undefined') {
+      requestIdleCallback(() => warm());
+    } else {
+      timerId = setTimeout(warm, 1200);
+    }
+
+    return () => {
+      if (timerId !== null) {
+        clearTimeout(timerId);
+      }
+      compilerRef.current?.terminate();
+    };
+  }, [setCompilerMessage, setWasmStatus]);
+
   useEffect(() => {
     runtimeRef.current = new RuntimeBridge({
       onStdout: (data) => terminalRef.current?.write(data),
@@ -60,6 +88,7 @@ export function App() {
         setCompileStatus('error');
       },
     });
+
     return () => runtimeRef.current?.terminate();
   }, [setCompileStatus]);
 
@@ -89,7 +118,15 @@ export function App() {
       terminalRef.current?.writeln('\x1b[90m--- Running... ---\x1b[0m');
       terminalRef.current?.writeln('');
       runtimeRef.current?.run(result.wasmBinary);
+      return;
     }
+
+    if (result.stdout) {
+      terminalRef.current?.write(result.stdout);
+    }
+    terminalRef.current?.writeln('');
+    terminalRef.current?.writeln('\x1b[90m--- Program exited with code 0 ---\x1b[0m');
+    setCompileStatus('idle');
   }, [code, setCompileStatus]);
 
   const handleTerminalData = useCallback((data: string) => {
@@ -121,11 +158,11 @@ export function App() {
       </header>
 
       <Split
-        className="split-container"
-        sizes={[55, 45]}
-        minSize={200}
+        className={`split-container${isMobile ? ' split-vertical' : ''}`}
+        sizes={isMobile ? [60, 40] : [55, 45]}
+        minSize={isMobile ? 100 : 200}
         gutterSize={6}
-        direction="horizontal"
+        direction={isMobile ? 'vertical' : 'horizontal'}
       >
         <div className="editor-pane">
           <CodeEditor />

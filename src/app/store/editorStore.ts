@@ -20,11 +20,13 @@ interface EditorState {
   compileStatus: CompileStatus;
   compileErrors: string[];
   wasmStatus: Record<WasmModule, WasmLoadStatus>;
+  compilerMessage: string;
 
   setCode: (code: string) => void;
   setCompileStatus: (status: CompileStatus) => void;
   setCompileErrors: (errors: string[]) => void;
   setWasmStatus: (module: WasmModule, status: WasmLoadStatus) => void;
+  setCompilerMessage: (message: string) => void;
   wasmProgress: number;
   setWasmProgress: (progress: number) => void;
   resetCode: (code: string) => void;
@@ -40,6 +42,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     clangd: 'idle',
     compiler: 'idle',
   },
+  compilerMessage: '',
 
   setCode: (code) => set({ code, isDirty: code !== get().initialCode }),
   setCompileStatus: (compileStatus) => set({ compileStatus }),
@@ -48,6 +51,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     set((state) => ({
       wasmStatus: { ...state.wasmStatus, [module]: status },
     })),
+  setCompilerMessage: (compilerMessage) => set({ compilerMessage }),
   wasmProgress: 0,
   setWasmProgress: (wasmProgress) => set({ wasmProgress }),
   resetCode: (code) => set({ code, initialCode: code, isDirty: false }),

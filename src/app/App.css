@@ -125,10 +125,31 @@ html, body, #root {
 }
 
 @media (max-width: 768px) {
+  .toolbar {
+    padding: 0 8px;
+    height: 44px;
+  }
+
+  .logo {
+    font-size: 13px;
+  }
+
+  .toolbar-right {
+    gap: 4px;
+  }
+
   .split-container {
     flex-direction: column !important;
   }
-  .gutter {
+
+  .split-vertical > .gutter {
     cursor: row-resize;
+    height: 6px !important;
+    width: 100% !important;
+  }
+
+  .editor-pane,
+  .terminal-pane {
+    width: 100% !important;
   }
 }

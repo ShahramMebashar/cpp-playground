@@ -1,4 +1,4 @@
-import { createWasiImports, WasiExit } from '../lib/wasiRuntime';
+import { createWasiImports, WasiExit, MemoryRef } from '../lib/wasiRuntime';
 
 export interface RunRequest {
   type: 'run';
@@ -52,53 +52,39 @@ self.onmessage = async (e: MessageEvent<WorkerInput>) => {
   };
 
   try {
-    const module = await WebAssembly.compile(wasmBinary.buffer as ArrayBuffer);
+    const wasmBuffer = new Uint8Array(wasmBinary).buffer;
+    const module = await WebAssembly.compile(wasmBuffer);
+    const moduleImports = WebAssembly.Module.imports(module);
+    const needsEnvMemory = moduleImports.some(
+      (imp) => imp.module === 'env' && imp.name === 'memory',
+    );
 
-    // Try with imported memory first
-    let instance: WebAssembly.Instance;
-    let memory = new WebAssembly.Memory({ initial: 256, maximum: 4096 });
+    // Mutable ref so WASI functions always see the correct memory
+    const memoryRef: MemoryRef = {
+      current: new WebAssembly.Memory({ initial: 256, maximum: 4096 }),
+    };
 
-    try {
-      const wasiImports = createWasiImports(memory, {
-        stdinBuffer,
-        onStdout,
-        onStderr,
-        onExit,
-      });
-      instance = await WebAssembly.instantiate(module, {
-        ...wasiImports,
-        env: { memory },
-      });
-    } catch {
-      // Module likely exports its own memory — instantiate without env.memory
-      // Use a placeholder memory; we'll replace with the exported one below
-      const tempMemory = new WebAssembly.Memory({ initial: 1 });
-      const wasiImports = createWasiImports(tempMemory, {
-        stdinBuffer,
-        onStdout,
-        onStderr,
-        onExit,
-      });
-      instance = await WebAssembly.instantiate(module, wasiImports);
+    const wasiImports = createWasiImports(memoryRef, {
+      stdinBuffer,
+      onStdout,
+      onStderr,
+      onExit,
+    });
 
-      // Use the module's exported memory
-      if (instance.exports.memory instanceof WebAssembly.Memory) {
-        memory = instance.exports.memory;
-      }
+    const wasiModule = wasiImports.wasi_snapshot_preview1;
 
-      // Re-create WASI imports with the correct memory and re-instantiate
-      const correctWasiImports = createWasiImports(memory, {
-        stdinBuffer,
-        onStdout,
-        onStderr,
-        onExit,
-      });
-      instance = await WebAssembly.instantiate(module, correctWasiImports);
-    }
+    const importObject: WebAssembly.Imports = {
+      wasi_snapshot_preview1: wasiModule,
+      wasi_unstable: wasiModule,
+      env: needsEnvMemory ? { memory: memoryRef.current } : {},
+    };
 
-    // If the module exports its own memory, prefer it
+    const instance = await WebAssembly.instantiate(module, importObject);
+
+    // If the module exports its own memory, point the ref at it
+    // so all WASI syscalls read/write the correct buffer.
     if (instance.exports.memory instanceof WebAssembly.Memory) {
-      memory = instance.exports.memory;
+      memoryRef.current = instance.exports.memory;
     }
 
     (instance.exports._start as Function)();

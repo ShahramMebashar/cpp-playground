@@ -4,6 +4,10 @@ export interface CompileRequest {
   code: string;
 }
 
+export interface WarmupRequest {
+  type: 'warmup';
+}
+
 export interface CompileResponse {
   type: 'compile-result';
   id: string;
@@ -26,149 +30,202 @@ export interface StatusMessage {
   progress?: number;
 }
 
-type WorkerMessage = CompileRequest;
+type WorkerMessage = CompileRequest | WarmupRequest;
 type WorkerResponse = CompileResponse | StatusMessage;
+
+type TaskStatus = {
+  type: 'task-status';
+  id: string;
+  message: string;
+};
+
+type TaskResult = {
+  type: 'task-result';
+  id: string;
+  success: boolean;
+  wasmBinary?: Uint8Array;
+  stderr?: string;
+  stdout?: string;
+  errors?: Array<{
+    line: number;
+    column: number;
+    message: string;
+    severity: 'error' | 'warning';
+  }>;
+};
+
+type TaskResponse = TaskStatus | TaskResult;
+
+const TASK_TIMEOUT_MS = 25_000;
 
 function respond(msg: WorkerResponse) {
   self.postMessage(msg);
 }
 
-// Lazily initialized compiler state
-let clangPkg: Awaited<ReturnType<typeof loadCompiler>> | null = null;
-let initPromise: Promise<void> | null = null;
+let taskWorker: Worker | null = null;
+let timeoutId: ReturnType<typeof setTimeout> | null = null;
+let activeCompileId: string | null = null;
 
-async function loadCompiler() {
-  const { init, Wasmer } = await import('@wasmer/sdk');
-  await init();
-  const pkg = await Wasmer.fromRegistry('clang/clang');
-  return pkg;
-}
+function ensureTaskWorker() {
+  if (taskWorker) return;
 
-async function initCompiler() {
-  respond({ type: 'status', status: 'loading', message: 'Initializing Wasmer SDK...', progress: 0 });
+  taskWorker = new Worker(new URL('./compilerTask.worker.ts', import.meta.url), {
+    type: 'module',
+  });
 
-  try {
-    respond({ type: 'status', status: 'loading', message: 'Loading Wasmer SDK...', progress: 0.1 });
-    const { init, Wasmer } = await import('@wasmer/sdk');
+  taskWorker.onmessage = (event: MessageEvent<TaskResponse>) => {
+    const msg = event.data;
 
-    respond({ type: 'status', status: 'loading', message: 'Initializing WASM runtime...', progress: 0.3 });
-    await init();
+    if (msg.type === 'task-status') {
+      respond({
+        type: 'status',
+        status: 'ready',
+        message: msg.message,
+        progress: 1,
+      });
+      return;
+    }
 
-    respond({ type: 'status', status: 'loading', message: 'Fetching clang/clang from registry...', progress: 0.5 });
-    clangPkg = await Wasmer.fromRegistry('clang/clang');
+    if (msg.type === 'task-result') {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      activeCompileId = null;
 
-    respond({ type: 'status', status: 'ready', message: 'Compiler ready', progress: 1.0 });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    respond({ type: 'status', status: 'error', message: `Failed to initialize compiler: ${message}` });
-    throw err;
-  }
-}
+      respond({
+        type: 'compile-result',
+        id: msg.id,
+        success: msg.success,
+        wasmBinary: msg.wasmBinary,
+        stdout: msg.stdout,
+        stderr: msg.stderr,
+        errors: msg.errors,
+      });
 
-function parseClangErrors(stderr: string): NonNullable<CompileResponse['errors']> {
-  const errors: NonNullable<CompileResponse['errors']> = [];
-  const regex = /^[^:]+:(\d+):(\d+):\s+(error|warning):\s+(.+)$/;
-
-  for (const line of stderr.split('\n')) {
-    const match = line.match(regex);
-    if (match) {
-      errors.push({
-        line: parseInt(match[1], 10),
-        column: parseInt(match[2], 10),
-        severity: match[3] as 'error' | 'warning',
-        message: match[4],
+      respond({
+        type: 'status',
+        status: msg.success ? 'ready' : 'error',
+        message: msg.success ? 'Compilation complete' : msg.stderr || 'Compilation failed',
+        progress: 1,
       });
     }
-  }
+  };
 
-  return errors;
-}
+  taskWorker.onerror = (event) => {
+    const compileId = activeCompileId;
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
 
-async function compile(id: string, code: string) {
-  try {
-    const { Directory } = await import('@wasmer/sdk');
+    taskWorker?.terminate();
+    taskWorker = null;
+    activeCompileId = null;
 
-    const srcDir = new Directory();
-    await srcDir.writeFile('main.cpp', new TextEncoder().encode(code));
-
-    const outDir = new Directory();
-
-    const instance = await clangPkg!.entrypoint!.run({
-      args: [
-        'clang++',
-        '/src/main.cpp',
-        '-o', '/out/program.wasm',
-        '--target=wasm32-wasi',
-        '-std=c++17',
-        '-O2',
-        '-lc++',
-        '-lc++abi',
-      ],
-      mount: { '/src': srcDir, '/out': outDir },
-    });
-
-    const output = await instance.wait();
-    const errors = parseClangErrors(output.stderr);
-
-    if (output.ok) {
-      const wasmBinary = await outDir.readFile('program.wasm');
+    if (compileId) {
       respond({
         type: 'compile-result',
-        id,
-        success: true,
-        wasmBinary,
-        errors,
-        stdout: output.stdout,
-        stderr: output.stderr,
-      });
-    } else {
-      respond({
-        type: 'compile-result',
-        id,
+        id: compileId,
         success: false,
-        errors: errors.length > 0 ? errors : [{ line: 1, column: 1, severity: 'error', message: output.stderr || 'Compilation failed' }],
-        stdout: output.stdout,
-        stderr: output.stderr,
+        stderr: `Compiler worker crashed: ${event.message || 'unknown error'}`,
+        errors: [{
+          line: 1,
+          column: 1,
+          severity: 'error',
+          message: `Compiler worker crashed: ${event.message || 'unknown error'}`,
+        }],
       });
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+
+    respond({
+      type: 'status',
+      status: 'error',
+      message: 'Compiler worker crashed and was reset',
+    });
+  };
+}
+
+function runCompile(id: string, code: string) {
+  ensureTaskWorker();
+
+  if (!taskWorker) {
     respond({
       type: 'compile-result',
       id,
       success: false,
-      errors: [{ line: 1, column: 1, severity: 'error', message }],
-      stderr: message,
+      stderr: 'Compiler task worker unavailable',
+      errors: [{ line: 1, column: 1, severity: 'error', message: 'Compiler task worker unavailable' }],
     });
+    return;
   }
-}
 
-self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
-  const msg = e.data;
+  if (activeCompileId) {
+    respond({
+      type: 'compile-result',
+      id,
+      success: false,
+      stderr: 'Another compilation is already in progress',
+      errors: [{ line: 1, column: 1, severity: 'error', message: 'Another compilation is already in progress' }],
+    });
+    return;
+  }
 
-  if (msg.type === 'compile') {
-    // Lazy init: ensure compiler is loaded before first compile
-    if (!clangPkg) {
-      if (!initPromise) {
-        initPromise = initCompiler();
-      }
-      try {
-        await initPromise;
-      } catch {
-        respond({
-          type: 'compile-result',
-          id: msg.id,
-          success: false,
-          errors: [{ line: 1, column: 1, severity: 'error', message: 'Compiler failed to initialize' }],
-          stderr: 'Compiler failed to initialize',
-        });
-        return;
-      }
+  activeCompileId = id;
+  respond({
+    type: 'status',
+    status: 'loading',
+    message: 'Starting compiler task...',
+    progress: 0.6,
+  });
+
+  taskWorker.postMessage({ type: 'task-compile', id, code });
+
+  timeoutId = setTimeout(() => {
+    const timedOutId = activeCompileId;
+    taskWorker?.terminate();
+    taskWorker = null;
+    activeCompileId = null;
+    timeoutId = null;
+
+    if (timedOutId) {
+      respond({
+        type: 'compile-result',
+        id: timedOutId,
+        success: false,
+        stderr: `Compilation exceeded ${TASK_TIMEOUT_MS / 1000}s and was aborted`,
+        errors: [{
+          line: 1,
+          column: 1,
+          severity: 'error',
+          message: `Compilation exceeded ${TASK_TIMEOUT_MS / 1000}s and was aborted`,
+        }],
+      });
     }
 
-    await compile(msg.id, msg.code);
+    respond({
+      type: 'status',
+      status: 'error',
+      message: 'Compiler task timed out and was reset',
+    });
+  }, TASK_TIMEOUT_MS);
+}
+
+self.onmessage = (event: MessageEvent<WorkerMessage>) => {
+  const msg = event.data;
+
+  if (msg.type === 'warmup') {
+    ensureTaskWorker();
+    respond({
+      type: 'status',
+      status: 'ready',
+      message: 'Compiler warmup ready',
+      progress: 1,
+    });
+    return;
+  }
+
+  if (msg.type === 'compile') {
+    runCompile(msg.id, msg.code);
   }
 };
-
-// Eagerly start loading the compiler
-initPromise = initCompiler();
