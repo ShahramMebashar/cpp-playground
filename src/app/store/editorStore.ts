@@ -21,6 +21,9 @@ interface EditorState {
   compileErrors: string[];
   wasmStatus: Record<WasmModule, WasmLoadStatus>;
   compilerMessage: string;
+  toolchainLoading: boolean;
+  toolchainProgress: number;
+  toolchainDetail: string;
 
   setCode: (code: string) => void;
   setCompileStatus: (status: CompileStatus) => void;
@@ -29,6 +32,8 @@ interface EditorState {
   setCompilerMessage: (message: string) => void;
   wasmProgress: number;
   setWasmProgress: (progress: number) => void;
+  setToolchainLoading: (loading: boolean) => void;
+  setToolchainProgress: (progress: number, detail?: string) => void;
   resetCode: (code: string) => void;
 }
 
@@ -43,6 +48,9 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     compiler: 'idle',
   },
   compilerMessage: '',
+  toolchainLoading: false,
+  toolchainProgress: 0,
+  toolchainDetail: '',
 
   setCode: (code) => set({ code, isDirty: code !== get().initialCode }),
   setCompileStatus: (compileStatus) => set({ compileStatus }),
@@ -54,5 +62,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
   setCompilerMessage: (compilerMessage) => set({ compilerMessage }),
   wasmProgress: 0,
   setWasmProgress: (wasmProgress) => set({ wasmProgress }),
+  setToolchainLoading: (toolchainLoading) => set({ toolchainLoading }),
+  setToolchainProgress: (progress, detail) => set({ toolchainProgress: progress, toolchainDetail: detail ?? '' }),
   resetCode: (code) => set({ code, initialCode: code, isDirty: false }),
 }));

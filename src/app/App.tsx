@@ -7,6 +7,7 @@ import type { TerminalHandle } from '../components/Terminal/Terminal';
 import { TemplateMenu } from '../components/Templates/TemplateMenu';
 import { ShareButton } from '../components/Share/ShareButton';
 import { StatusBar } from '../components/StatusBar/StatusBar';
+import { LoadingModal } from '../components/Loading/LoadingModal';
 import { CompilerBridge } from '../lib/compilerBridge';
 import { RuntimeBridge } from '../lib/runtimeBridge';
 import { decodeCode } from '../lib/shareCodec';
@@ -45,13 +46,26 @@ export function App() {
 
   // Initialize compiler bridge
   useEffect(() => {
-    const setWasmProgress = useEditorStore.getState().setWasmProgress;
+    const store = useEditorStore.getState();
+    const setWasmProgress = store.setWasmProgress;
+    const setToolchainLoading = store.setToolchainLoading;
+    const setToolchainProgress = store.setToolchainProgress;
+
     compilerRef.current = new CompilerBridge((status) => {
       setWasmStatus('compiler', status.status === 'ready' ? 'ready' : status.status === 'loading' ? 'loading' : 'error');
       setCompilerMessage(status.message ?? '');
       if (status.progress !== undefined) {
         setWasmProgress(status.progress);
+        setToolchainProgress(status.progress, status.detail);
       }
+
+      // Show modal while toolchain is loading (progress < 1)
+      if (status.status === 'loading' && status.progress !== undefined && status.progress < 1) {
+        setToolchainLoading(true);
+      } else if (status.status === 'ready' || status.status === 'error') {
+        setToolchainLoading(false);
+      }
+
       if (status.status === 'error' && status.message) {
         terminalRef.current?.writeln(`\x1b[31m${status.message}\x1b[0m`);
       }
@@ -173,6 +187,7 @@ export function App() {
       </Split>
 
       <StatusBar />
+      <LoadingModal />
     </div>
   );
 }

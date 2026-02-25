@@ -28,6 +28,7 @@ export interface StatusMessage {
   status: 'loading' | 'ready' | 'error';
   message?: string;
   progress?: number;
+  detail?: string;
 }
 
 type WorkerMessage = CompileRequest | WarmupRequest;
@@ -37,6 +38,8 @@ type TaskStatus = {
   type: 'task-status';
   id: string;
   message: string;
+  progress?: number;
+  detail?: string;
 };
 
 type TaskResult = {
@@ -56,7 +59,7 @@ type TaskResult = {
 
 type TaskResponse = TaskStatus | TaskResult;
 
-const TASK_TIMEOUT_MS = 25_000;
+const TASK_TIMEOUT_MS = 60_000;
 
 function respond(msg: WorkerResponse) {
   self.postMessage(msg);
@@ -79,9 +82,10 @@ function ensureTaskWorker() {
     if (msg.type === 'task-status') {
       respond({
         type: 'status',
-        status: 'ready',
+        status: msg.progress !== undefined && msg.progress < 1 ? 'loading' : 'ready',
         message: msg.message,
-        progress: 1,
+        progress: msg.progress ?? 1,
+        detail: msg.detail,
       });
       return;
     }

@@ -23,6 +23,8 @@ export interface TaskStatus {
   type: 'task-status';
   id: string;
   message: string;
+  progress?: number;
+  detail?: string;
 }
 
 type TaskMessage = TaskCompileRequest;
@@ -65,9 +67,66 @@ const TOOLCHAIN_BASE_URL = 'https://binji.github.io/wasm-clang/';
 let apiCtorPromise: Promise<WclangCtor> | null = null;
 let wclangApi: WclangApi | null = null;
 let ioBuffer = '';
+let activeId = '';
+
+// Track download progress for the toolchain
+const assetSizes: Record<string, number> = {
+  'shared.js': 50_000,
+  'clang': 5_000_000,
+  'lld': 3_000_000,
+  'memfs': 200_000,
+  'sysroot.tar': 7_000_000,
+};
+const totalEstimate = Object.values(assetSizes).reduce((a, b) => a + b, 0);
+let downloadedBytes = 0;
+let assetIndex = 0;
+const totalAssets = Object.keys(assetSizes).length;
 
 function post(msg: TaskResponse) {
   self.postMessage(msg);
+}
+
+function postProgress(message: string, detail?: string) {
+  const progress = Math.min(0.95, downloadedBytes / totalEstimate);
+  post({ type: 'task-status', id: activeId, message, progress, detail });
+}
+
+/** Fetch with progress tracking */
+async function fetchWithProgress(url: string, label: string): Promise<Response> {
+  assetIndex++;
+  postProgress(`Downloading toolchain (${assetIndex}/${totalAssets})...`, label);
+
+  const response = await fetch(url);
+  const reader = response.body?.getReader();
+
+  if (!reader) {
+    const buf = await response.arrayBuffer();
+    downloadedBytes += buf.byteLength;
+    postProgress(`Downloading toolchain (${assetIndex}/${totalAssets})...`, label);
+    return new Response(buf, { headers: response.headers });
+  }
+
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.byteLength;
+    downloadedBytes += value.byteLength;
+    postProgress(`Downloading toolchain (${assetIndex}/${totalAssets})...`, `${label} — ${(received / 1024 / 1024).toFixed(1)} MB`);
+  }
+
+  const merged = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return new Response(merged.buffer, { headers: response.headers });
 }
 
 function toolchainUrl(filename: string): string {
@@ -108,16 +167,22 @@ function parseErrors(stderr: string): NonNullable<TaskCompileResult['errors']> {
 async function ensureApi(id: string) {
   if (wclangApi) return;
 
-  post({ type: 'task-status', id, message: 'Loading wasm-clang toolchain...' });
+  activeId = id;
+  downloadedBytes = 0;
+  assetIndex = 0;
+  post({ type: 'task-status', id, message: 'Preparing compiler...', progress: 0, detail: 'Loading toolchain API' });
   const ApiCtor = await loadApiCtor();
 
   wclangApi = new ApiCtor({
     async readBuffer(filename: string) {
-      const response = await fetch(toolchainUrl(filename));
+      const response = await fetchWithProgress(toolchainUrl(filename), filename);
       return response.arrayBuffer();
     },
     async compileStreaming(filename: string) {
-      const response = await fetch(toolchainUrl(filename));
+      const response = await fetchWithProgress(toolchainUrl(filename), filename);
+      if (typeof WebAssembly.compileStreaming === 'function' && response.headers.get('content-type')?.includes('wasm')) {
+        return WebAssembly.compileStreaming(response);
+      }
       const buf = await response.arrayBuffer();
       return WebAssembly.compile(buf);
     },
@@ -131,7 +196,9 @@ async function ensureApi(id: string) {
     showTiming: false,
   });
 
+  post({ type: 'task-status', id, message: 'Initializing compiler...', progress: 0.95, detail: 'Almost ready' });
   await wclangApi.ready;
+  post({ type: 'task-status', id, message: 'Compiler ready', progress: 1 });
 }
 
 async function compile(id: string, code: string) {
