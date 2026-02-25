@@ -1,5 +1,6 @@
 import Split from 'react-split';
 import { CodeEditor } from '../components/Editor/CodeEditor';
+import { Terminal } from '../components/Terminal/Terminal';
 import './App.css';
 
 export function App() {
@@ -27,7 +28,7 @@ export function App() {
           <CodeEditor />
         </div>
         <div className="terminal-pane">
-          <div className="placeholder">Terminal</div>
+          <Terminal />
         </div>
       </Split>
 
