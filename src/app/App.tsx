@@ -4,8 +4,12 @@ import { CodeEditor } from '../components/Editor/CodeEditor';
 import { EditorToolbar } from '../components/Editor/EditorToolbar';
 import { Terminal } from '../components/Terminal/Terminal';
 import type { TerminalHandle } from '../components/Terminal/Terminal';
+import { TemplateMenu } from '../components/Templates/TemplateMenu';
+import { ShareButton } from '../components/Share/ShareButton';
+import { StatusBar } from '../components/StatusBar/StatusBar';
 import { CompilerBridge } from '../lib/compilerBridge';
 import { RuntimeBridge } from '../lib/runtimeBridge';
+import { decodeCode } from '../lib/shareCodec';
 import { useEditorStore } from './store/editorStore';
 import './App.css';
 
@@ -17,6 +21,17 @@ export function App() {
   const code = useEditorStore((s) => s.code);
   const setCompileStatus = useEditorStore((s) => s.setCompileStatus);
   const setWasmStatus = useEditorStore((s) => s.setWasmStatus);
+
+  // Load code from URL hash on mount
+  useEffect(() => {
+    const hash = window.location.hash.slice(1);
+    if (hash) {
+      const decoded = decodeCode(hash);
+      if (decoded) {
+        useEditorStore.getState().resetCode(decoded);
+      }
+    }
+  }, []);
 
   // Initialize compiler bridge
   useEffect(() => {
@@ -84,7 +99,9 @@ export function App() {
           <span className="logo">C++ Playground</span>
         </div>
         <div className="toolbar-right">
+          <TemplateMenu />
           <EditorToolbar onRun={handleRun} />
+          <ShareButton />
         </div>
       </header>
 
@@ -103,9 +120,7 @@ export function App() {
         </div>
       </Split>
 
-      <footer className="status-bar">
-        <span>Ready</span>
-      </footer>
+      <StatusBar />
     </div>
   );
 }
