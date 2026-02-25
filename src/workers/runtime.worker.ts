@@ -1,4 +1,4 @@
-import { createWasiImports, WasiExit, MemoryRef } from '../lib/wasiRuntime';
+import { createWasiImports, WasiExit, type MemoryRef } from '../lib/wasiRuntime';
 
 export interface RunRequest {
   type: 'run';
