@@ -48,16 +48,16 @@ async function initCompiler() {
   respond({ type: 'status', status: 'loading', message: 'Initializing Wasmer SDK...', progress: 0 });
 
   try {
-    respond({ type: 'status', status: 'loading', message: 'Loading Wasmer SDK...', progress: 10 });
+    respond({ type: 'status', status: 'loading', message: 'Loading Wasmer SDK...', progress: 0.1 });
     const { init, Wasmer } = await import('@wasmer/sdk');
 
-    respond({ type: 'status', status: 'loading', message: 'Initializing WASM runtime...', progress: 30 });
+    respond({ type: 'status', status: 'loading', message: 'Initializing WASM runtime...', progress: 0.3 });
     await init();
 
-    respond({ type: 'status', status: 'loading', message: 'Fetching clang/clang from registry...', progress: 50 });
+    respond({ type: 'status', status: 'loading', message: 'Fetching clang/clang from registry...', progress: 0.5 });
     clangPkg = await Wasmer.fromRegistry('clang/clang');
 
-    respond({ type: 'status', status: 'ready', message: 'Compiler ready', progress: 100 });
+    respond({ type: 'status', status: 'ready', message: 'Compiler ready', progress: 1.0 });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     respond({ type: 'status', status: 'error', message: `Failed to initialize compiler: ${message}` });

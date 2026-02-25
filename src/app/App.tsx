@@ -93,7 +93,18 @@ export function App() {
   }, [code, setCompileStatus]);
 
   const handleTerminalData = useCallback((data: string) => {
-    runtimeRef.current?.sendStdin(data);
+    if (data === '\x04') {
+      runtimeRef.current?.sendEof();
+    } else {
+      runtimeRef.current?.sendStdin(data);
+      if (data === '\r') {
+        terminalRef.current?.write('\r\n');
+      } else if (data === '\x7f') {
+        terminalRef.current?.write('\b \b');
+      } else {
+        terminalRef.current?.write(data);
+      }
+    }
   }, []);
 
   return (

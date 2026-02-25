@@ -25,11 +25,14 @@ const sharedArrayBufferSupported = typeof SharedArrayBuffer !== 'undefined';
 
 const encoder = new TextEncoder();
 
+const EXECUTION_TIMEOUT_MS = 10_000;
+
 export class RuntimeBridge {
   private worker: Worker | null = null;
   private callbacks: RuntimeCallbacks;
   private stdinSignal: Int32Array | null = null;
   private stdinData: Uint8Array | null = null;
+  private timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   constructor(callbacks: RuntimeCallbacks) {
     this.callbacks = callbacks;
@@ -55,9 +58,11 @@ export class RuntimeBridge {
           this.callbacks.onStderr(msg.data);
           break;
         case 'exit':
+          this.clearTimeout();
           this.callbacks.onExit(msg.code);
           break;
         case 'runtime-error':
+          this.clearTimeout();
           this.callbacks.onError(msg.message);
           break;
       }
@@ -80,6 +85,12 @@ export class RuntimeBridge {
       wasmBinary,
       stdinBuffer: stdinBuffer ?? new SharedArrayBuffer(STDIN_TOTAL_BYTES),
     });
+
+    this.timeoutId = setTimeout(() => {
+      this.callbacks.onError(`Execution timed out after ${EXECUTION_TIMEOUT_MS / 1000}s`);
+      this.terminate();
+    }, EXECUTION_TIMEOUT_MS);
+
     return id;
   }
 
@@ -109,7 +120,15 @@ export class RuntimeBridge {
     Atomics.notify(this.stdinSignal, 0);
   }
 
+  private clearTimeout(): void {
+    if (this.timeoutId !== null) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+  }
+
   terminate(): void {
+    this.clearTimeout();
     this.worker?.terminate();
     this.worker = null;
     this.stdinSignal = null;
