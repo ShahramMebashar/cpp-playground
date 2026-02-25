@@ -25,6 +25,8 @@ interface EditorState {
   setCompileStatus: (status: CompileStatus) => void;
   setCompileErrors: (errors: string[]) => void;
   setWasmStatus: (module: WasmModule, status: WasmLoadStatus) => void;
+  wasmProgress: number;
+  setWasmProgress: (progress: number) => void;
   resetCode: (code: string) => void;
 }
 
@@ -46,5 +48,7 @@ export const useEditorStore = create<EditorState>()((set, get) => ({
     set((state) => ({
       wasmStatus: { ...state.wasmStatus, [module]: status },
     })),
+  wasmProgress: 0,
+  setWasmProgress: (wasmProgress) => set({ wasmProgress }),
   resetCode: (code) => set({ code, initialCode: code, isDirty: false }),
 }));

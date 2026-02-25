@@ -30,6 +30,14 @@ describe('editorStore', () => {
     expect(useEditorStore.getState().wasmStatus.compiler).toBe('ready');
   });
 
+  it('tracks WASM download progress', () => {
+    const { setWasmProgress } = useEditorStore.getState();
+    setWasmProgress(0.5);
+    expect(useEditorStore.getState().wasmProgress).toBe(0.5);
+    setWasmProgress(1.0);
+    expect(useEditorStore.getState().wasmProgress).toBe(1.0);
+  });
+
   it('marks dirty when code changes from initial', () => {
     const initial = useEditorStore.getState().code;
     useEditorStore.getState().setCode('changed');

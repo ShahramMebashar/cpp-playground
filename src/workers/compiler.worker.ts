@@ -23,6 +23,7 @@ export interface StatusMessage {
   type: 'status';
   status: 'loading' | 'ready' | 'error';
   message?: string;
+  progress?: number;
 }
 
 type WorkerMessage = CompileRequest;

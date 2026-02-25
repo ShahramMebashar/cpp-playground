@@ -3,11 +3,13 @@ import { useEditorStore } from '../../app/store/editorStore';
 export function StatusBar() {
   const compileStatus = useEditorStore((s) => s.compileStatus);
   const wasmStatus = useEditorStore((s) => s.wasmStatus);
+  const wasmProgress = useEditorStore((s) => s.wasmProgress);
 
   const statusParts: string[] = [];
 
   if (wasmStatus.compiler === 'loading') {
-    statusParts.push('Loading compiler...');
+    const pct = Math.round(wasmProgress * 100);
+    statusParts.push(`Downloading compiler... ${pct}%`);
   } else if (wasmStatus.compiler === 'error') {
     statusParts.push('Compiler failed to load');
   }

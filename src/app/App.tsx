@@ -35,8 +35,12 @@ export function App() {
 
   // Initialize compiler bridge
   useEffect(() => {
+    const setWasmProgress = useEditorStore.getState().setWasmProgress;
     compilerRef.current = new CompilerBridge((status) => {
       setWasmStatus('compiler', status.status === 'ready' ? 'ready' : status.status === 'loading' ? 'loading' : 'error');
+      if (status.progress !== undefined) {
+        setWasmProgress(status.progress);
+      }
     });
     return () => compilerRef.current?.terminate();
   }, [setWasmStatus]);
