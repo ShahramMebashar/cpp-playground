@@ -1,4 +1,5 @@
 import Split from 'react-split';
+import { CodeEditor } from '../components/Editor/CodeEditor';
 import './App.css';
 
 export function App() {
@@ -23,7 +24,7 @@ export function App() {
         direction="horizontal"
       >
         <div className="editor-pane">
-          <div className="placeholder">Editor</div>
+          <CodeEditor />
         </div>
         <div className="terminal-pane">
           <div className="placeholder">Terminal</div>
